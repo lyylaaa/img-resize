@@ -1,11 +1,19 @@
 const path = require('path');
-const {app, BrowserWindow, Menu} = require('electron');
+const os = require('os');
+const fs = require('fs');
+const resizeImg = require('resize-img');
+const {app, BrowserWindow, Menu, ipcMain, shell} = require('electron');
+
+process.env.NODE_ENV = 'production';
 
 const isMac = process.platform === 'darwin'
-const isDev = process.env.NODE_ENV !== 'development';
+const isDev = process.env.NODE_ENV !== 'production';
+
+let mainWindow;
+let aboutWindow;
 
 function createMainWindows(){
-    const mainWindow = new BrowserWindow({
+    mainWindow = new BrowserWindow({
             title: 'Image Rezier',
             width: isDev ? 1000 : 500,
             height: 600,
@@ -41,6 +49,10 @@ app.whenReady().then(() => {
     createMainWindows()
     const mainMenu= Menu.buildFromTemplate(menu);
     Menu.setApplicationMenu(mainMenu);
+
+    //remove mainWindow from memory on close
+    mainWindow.on('closed', () => (mainWindow = null))
+
     app.on('activate', () => {
         if(BrowserWindow.getAllWindows().length === 0){ createMainWindows() }
     });
@@ -66,9 +78,59 @@ const menu = [
             label: 'About',
             click: createAboutWindow,
         }]
-   }] : [])
-]
+   }] : []),
+   ...(isDev
+    ? [
+        {
+          label: 'Developer',
+          submenu: [
+            { role: 'reload' },
+            { role: 'forcereload' },
+            { type: 'separator' },
+            { role: 'toggledevtools' },
+          ],
+        },
+      ]
+    : []),
+];
 
+
+
+
+// respond to ipcRenderer resize
+ipcMain.on('image:resize', (e, options) => {
+    options.dest = path.join(os.homedir(), 'imageresizer');
+    resizeImage(options);
+})
+
+// resize the image
+async function resizeImage({imgPath, width, height, dest}){
+    try{
+        const newPath = await resizeImg(fs.readFileSync(imgPath), {
+            width: +width,
+            height: +height,
+        });
+        //create filename
+        const filename = path.basename(imgPath);
+
+        //Create dest folder if not exists
+        if(!fs.existsSync(dest)){
+            fs.mkdirSync(dest);
+        }
+
+        //write file to dest
+        fs.writeFileSync(path.join(dest, filename), newPath)
+
+        //send success to render 
+        mainWindow.webContents.send('image:done');
+
+        // open dest folder 
+        shell.openPath(dest);
+
+    }catch(error){
+        console.log(error);
+    }
+}
 
 app.on('window-all-closed', () => {
     if(!isMac) { app.quit(); }
